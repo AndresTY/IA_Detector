@@ -32,7 +32,7 @@ pip install pynput pywinauto configparser
 1. Clone the repository or download the source code.
 
 ```bash
-git clone
+git clone git@github.com:AndresTY/IA_Detector.git
 ```
 
 2. Make sure you have a `config.ini` file with the structure:
@@ -52,7 +52,7 @@ python script.py
 
 If you prefer to install the application:
 
-1. Download the installer from the [Releases](https://github.com/tu_usuario/tu_repositorio/releases) section.
+1. Download the installer from the [Releases](https://github.com/AndresTY/IA_Detector/releases) section.
 2. Run the `IADetecter_Setup.exe` file and install the application.
 3. Launch the application from the generated shortcut.
 
