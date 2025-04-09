@@ -5,16 +5,33 @@ from pynput import keyboard, mouse
 import sys
 from pywinauto import Desktop
 import configparser
+import psutil
+import os
+import subprocess
+import json
+import platform
 
 class InputBlocker:
     def __init__(self):
-        #self.password = "1234"  # CAMBIARLO!!!
         config = configparser.ConfigParser()
         config.read("config.ini")
         self.password = config.get("Configuracion", "password", fallback="")
         self.blocking = False
         self.text_block = "BLOCKED"  
-        self.ia_references = ["chatgpt", "copilot", "bard", "claude","deepseek","gemini"]
+        self.ia_references = ["chatgpt", "copilot", "bard", "claude", "deepseek", "gemini"]
+        
+        # VSCode AI extensions to detect
+        self.vscode_ai_extensions = [
+            "GitHub Copilot",
+            "Tabnine",
+            "CodeGPT",
+            "IntelliCode",
+            "Codeium",
+            "Amazon CodeWhisperer",
+            "CodeLlama",
+            "Kite",
+            "AWS Toolkit"
+        ]
         
         self.keyboard_listener = keyboard.Listener(on_press=self.on_key_press)
         self.mouse_listener = mouse.Listener(on_move=self.on_mouse_move, 
@@ -60,8 +77,8 @@ class InputBlocker:
         self.beep_thread = threading.Thread(target=self.continuous_beep)
         self.beep_thread.daemon = True
         
-        self.simulation_thread = threading.Thread(target=self.simulate_detection)
-        self.simulation_thread.daemon = True
+        self.detection_thread = threading.Thread(target=self.detection_loop)
+        self.detection_thread.daemon = True
     
     def check_password(self, event=None):
         try:
@@ -85,7 +102,7 @@ class InputBlocker:
             
             self.beep_thread.start()
             
-            self.simulation_thread.start()
+            self.detection_thread.start()
             
             self.root.mainloop()
         except Exception as e:
@@ -95,23 +112,147 @@ class InputBlocker:
             time.sleep(0.5)
             sys.exit(0)
     
-    def simulate_detection(self):
+    def check_vscode_extensions(self):
+
+        def get_vscode_extensions():
+            cmd = "code --list-extensions --show-versions"
+
+            try:
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    print(f"Error al ejecutar el comando: {result.stderr}")
+                    return [], []
+                
+                output = result.stdout.strip()
+                extensions = output.split('\n')
+                
+                user_settings_path = get_vscode_settings_path()
+                disabled_extensions = get_disabled_extensions(user_settings_path)
+                
+                active_extensions = []
+                inactive_extensions = []
+                
+                for ext in extensions:
+                    if ext:
+                        ext_id = ext.split('@')[0] if '@' in ext else ext
+                        if ext_id in disabled_extensions:
+                            inactive_extensions.append(ext)
+                        else:
+                            active_extensions.append(ext)
+                
+                return active_extensions, inactive_extensions
+
+            except Exception as e:
+                print(f"Error: {e}")
+                return [], []
+
+        def get_vscode_settings_path():
+            if platform.system() == "Windows":
+                return os.path.join(os.environ['APPDATA'], 'Code', 'User', 'settings.json')
+            elif platform.system() == "Darwin":
+                return os.path.expanduser('~/Library/Application Support/Code/User/settings.json')
+            else:
+                return os.path.expanduser('~/.config/Code/User/settings.json')
+
+        def get_disabled_extensions(settings_path):
+            disabled_extensions = []
+
+            if os.path.exists(settings_path):
+                try:
+                    with open(settings_path, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+
+                    extensions = settings.get('extensions', {})
+                    for ext_id, config in extensions.items():
+                        if isinstance(config, dict) and config.get('enabled') is False:
+                            disabled_extensions.append(ext_id)
+
+                    disabled = settings.get('extensions.ignoreRecommendations', [])
+                    if isinstance(disabled, list):
+                        disabled_extensions.extend(disabled)
+                except Exception as e:
+                    print(f"Error al leer settings.json: {e}")
+            
+            return disabled_extensions
+
+        def is_ai_extension(extension_id):
+            keywords = ['ai', 'gpt', 'copilot', 'intellicode', 'genai', 'codium', 'codewhisperer']
+            ext_id_lower = extension_id.lower()
+            return any(kw in ext_id_lower for kw in keywords)
+
+
+        try:
+            vscode_processes = [
+                proc for proc in psutil.process_iter(['name']) 
+                if proc.info['name'] and 'code' in proc.info['name'].lower()
+            ]
+            if not vscode_processes:
+                return False, ""
+
+            active, inactive = get_vscode_extensions()
+
+            print("\nExtensiones Activas:")
+            if active:
+                for ext in active:
+                    print(f"✓ {ext}")
+            else:
+                print("No se encontraron extensiones activas.")
+
+            print("\nExtensiones Inactivas:")
+            if inactive:
+                for ext in inactive:
+                    print(f"✗ {ext}")
+            else:
+                print("No se encontraron extensiones inactivas.")
+            
+            all_extensions = active + inactive
+            ai_extensions = [ext for ext in all_extensions if is_ai_extension(ext)]
+            ai_extension_ids = [ext.split('@')[0] if '@' in ext else ext for ext in ai_extensions]
+
+            print("\nExtensiones relacionadas con IA:")
+            if ai_extensions:
+                for ext in ai_extensions:
+                    print(f"🤖 {ext}")
+            else:
+                print("No se detectaron extensiones de IA.")
+
+            if ai_extension_ids:
+                return True, "IA Extension Detected"
+
+            return False, ""
+        
+        except Exception as e:
+            print(f"Error al verificar extensiones de VSCode: {e}")
+            return False, ""
+
+    
+    def detection_loop(self):
         while self.running:
             try:
-                time.sleep(5)
+                time.sleep(2)
                 if self.running and not self.blocking:
                     windows = Desktop(backend="uia").windows()
                     for win in windows:
                         if win.window_text(): 
                             for i in self.ia_references:
-                                if i in win.window_text().lower() :
-                                    self.text_block += " - " + i
+                                if i in win.window_text().lower():
+                                    detected_ai = i
+                                    self.text_block = f"BLOCKED - {detected_ai}"
                                     self.label.config(text=self.text_block)
                                     print(f"Sitio de IA detectado: {win}")
                                     self.root.after(0, lambda: self.block_input(True))
                                     break
+                    
+                    has_ai_extension, extension_name = self.check_vscode_extensions()
+                    if has_ai_extension:
+                        self.text_block = f"BLOCKED - VSCode: {extension_name}"
+                        self.label.config(text=self.text_block)
+                        print(f"Extensión AI de VSCode detectada: {extension_name}")
+                        self.root.after(0, lambda: self.block_input(True))
+                        
             except Exception as e:
-                print(f"Error en simulación: {e}")
+                print(f"Error en detección: {e}")
                 time.sleep(1)
             
     def block_input(self, should_block):
@@ -131,6 +272,7 @@ class InputBlocker:
             elif not should_block and self.blocking:
                 self.blocking = False
                 self.beep_active = False
+                self.text_block = "BLOCKED"
                 self.status_label.config(text="")
                 self.root.withdraw()
         except Exception as e:
